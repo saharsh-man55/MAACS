@@ -5,8 +5,7 @@ output: html_document
 
 
 ## Name
-
-Please enter your name here.
+Saharsh Manderwad
 
 ### Setup
 
@@ -15,7 +14,38 @@ Read in the data with `read_csv()` and store the data as an R object named `data
 
 ```{r}
 ## Load the data and any necessary packages here.
+knitr::opts_chunk$set(
+  echo = TRUE, message = FALSE, warning = FALSE,
+  fig.align = "center", fig.width = 7, fig.height = 5,
+  out.width = "90%", dpi = 144
+)
+need <- c("readr","dplyr")
+to_install <- setdiff(need, rownames(installed.packages()))
+if (length(to_install)) install.packages(to_install, quiet = TRUE)
+suppressPackageStartupMessages(
+  invisible(lapply(need, function(pkg) library(pkg, character.only = TRUE)))
+)
 
+fname <- if (file.exists("maacs.csv")) "maacs.csv" else if (file.exists("maacs.csv.gz")) "maacs.csv.gz" else stop("maacs.csv[.gz] not found.")
+dataset <- readr::read_csv(fname, show_col_types = FALSE)
+
+tibble::tibble(rows = nrow(dataset), cols = ncol(dataset)) |>
+  knitr::kable(caption = "Dataset dimensions")
+tibble::tibble(variable = names(dataset)) |>
+  knitr::kable(caption = "Variable names")
+
+expected_cols <- c("id","age","gender","fev1","eNO","cough_days","pm25","no2","mouse","mouse_allergic")
+tibble::tibble(expected = expected_cols, present = expected_cols %in% names(dataset)) |>
+  knitr::kable()
+
+dup_ids <- sum(duplicated(dataset$id))
+tibble::tibble(duplicate_ids = dup_ids) |>
+  knitr::kable(caption = "Duplicate ID count")
+
+missing <- sapply(dataset, function(x) sum(is.na(x)))
+tibble::tibble(variable = names(missing), n_missing = as.integer(missing)) |>
+  dplyr::arrange(dplyr::desc(n_missing)) |>
+  knitr::kable()
 ```
 
 ## Part 1
@@ -32,6 +62,17 @@ NOTE: For this part, do not use any plots.
 
 ```{r}
 ## Write your function here
+fev1_age_statement_true <- function(dataset) {
+  d <- dataset[, c("fev1","age")]
+  d <- d[complete.cases(d), ]
+  if (nrow(d) < 3) return(FALSE)
+  fit <- lm(fev1 ~ age, data = d)
+  co <- summary(fit)$coefficients
+  as.logical(co["age","Estimate"] > 0 & co["age","Pr(>|t|)"] < 0.05)
+}
+
+tibble::tibble(statement_true = fev1_age_statement_true(dataset)) |>
+  knitr::kable(caption = "Part 1 result")
 
 ```
 
@@ -44,12 +85,37 @@ How much does FEV1 change for a 1-year increase in the child's age?
 
 ```{r}
 ## Add your code here
+fit_age <- lm(fev1 ~ age, data = dataset)
+coef_age <- unname(coef(fit_age)["age"])
+ci_age <- confint(fit_age, "age", level = 0.95)
+p_age <- summary(fit_age)$coefficients["age","Pr(>|t|)"]
 
+knitr::kable(
+  data.frame(
+    term = "age (per 1 year)",
+    estimate = round(coef_age, 3),
+    conf.low = round(ci_age[1], 3),
+    conf.high = round(ci_age[2], 3),
+    p = format.pval(p_age, digits = 3)
+  ),
+  caption = "Linear regression: FEV1 ~ age (effect of age)"
+)
+
+sm <- summary(fit_age)
+knitr::kable(
+  data.frame(
+    R2 = round(sm$r.squared, 3),
+    Adj_R2 = round(sm$adj.r.squared, 3),
+    N = stats::nobs(fit_age)
+  ),
+  caption = "Model fit (minimal)"
+)
 ```
 
 
 Write your data analysis statement interpreting the regression model here:
 
+FEV1 changes by about `r round(coef_age, 3)` L for every additional year of age (95% CI: `r round(ci_age[1], 3)` to `r round(ci_age[2], 3)`).
 
 
 ## Part 3
@@ -64,17 +130,40 @@ NOTE:
 
 ```{r}
 ## Add your code here
+d <- dataset[, c("age","fev1")]
+d <- d[complete.cases(d), ]
+
+ct <- cor.test(d$age, d$fev1)
+cor_r <- unname(ct$estimate)
+cor_p <- ct$p.value
+p_txt <- format(cor_p, scientific = TRUE, digits = 3)
+
+q1_thresh <- as.numeric(quantile(d$age, 0.25, na.rm = TRUE))
+q3_thresh <- as.numeric(quantile(d$age, 0.75, na.rm = TRUE))
+mean_young <- mean(d$fev1[d$age <= q1_thresh], na.rm = TRUE)
+mean_old   <- mean(d$fev1[d$age >= q3_thresh], na.rm = TRUE)
+diff_q4_q1 <- mean_old - mean_young
+
+fit_p3 <- lm(fev1 ~ age, data = d)
+slope_p3 <- unname(coef(fit_p3)["age"])
+ci_p3 <- confint(fit_p3, "age", level = 0.95)
+
+plot(d$age, d$fev1, xlab = "Age (years)", ylab = "FEV1 (L)", main = "FEV1 vs Age")
+abline(fit_p3, lwd = 2)
 
 ```
 
 
 Write the three supporting premise statements here:
 
-1. 
+1. A Pearson correlation test shows a positive association between age and FEV1 (r = `r round(cor_r, 3)`, p = `r p_txt`).
 
-2. 
 
-3. 
+2. Children in the highest age quartile (≥ Q3) have a greater mean FEV1 than those in the lowest quartile (≤ Q1), with a difference of `r round(diff_q4_q1, 3)` L (`r round(mean_old, 3)` vs. `r round(mean_young, 3)` L).
+
+
+3. The regression line fitted to the scatterplot indicates a positive slope of `r round(slope_p3, 3)` L per year (95% CI: `r round(ci_p3[1], 3)`–`r round(ci_p3[2], 3)`).
+
 
 
 ## Part 4
@@ -90,18 +179,67 @@ For statements involving plots, instead of returning `TRUE` or `FALSE`, you func
 
 ```{r}
 ## Function for supporting premise statement 1
+premise1_positive_correlation <- function(dataset) {
+  d <- dataset[, c("age","fev1")]
+  d <- d[complete.cases(d), ]
+  if (nrow(d) < 3) return(FALSE)
+  ct <- suppressWarnings(cor.test(d$age, d$fev1))
+  isTRUE(unname(ct$estimate) > 0 & ct$p.value < 0.05)
+}
+tibble::tibble(
+  Premise = "Correlation > 0 & significant",
+  Result  = premise1_positive_correlation(dataset)
+) |>
+  knitr::kable(caption = "Premise 1 check")
 
 ```
 
 
 ```{r}
 ## Function for supporting premise statement 2
+premise2_q4_greater_than_q1 <- function(dataset) {
+  d <- dataset[, c("age","fev1")]
+  d <- d[complete.cases(d), ]
+  if (nrow(d) < 3) return(FALSE)
+  q1 <- as.numeric(quantile(d$age, 0.25, na.rm = TRUE))
+  q3 <- as.numeric(quantile(d$age, 0.75, na.rm = TRUE))
+  m_young <- mean(d$fev1[d$age <= q1], na.rm = TRUE)
+  m_old   <- mean(d$fev1[d$age >= q3], na.rm = TRUE)
+  isTRUE(m_old > m_young)
+}
+tibble::tibble(
+  Premise = "Oldest quartile mean > youngest",
+  Result  = premise2_q4_greater_than_q1(dataset)
+) |>
+  knitr::kable(caption = "Premise 2 check")
 
 ```
 
 
 ```{r}
 ## Function for supporting premise statement 3
+premise3_plots <- function(dataset) {
+  d <- dataset[, c("age","fev1")]
+  d <- d[complete.cases(d), ]
+  if (nrow(d) < 3) {
+    plot.new(); title("Insufficient data for plot"); return(invisible(NULL))
+  }
+  old_par <- par(no.readonly = TRUE); on.exit(par(old_par))
+  par(mfrow = c(1,2))
+
+  plot(d$age, d$fev1, xlab = "Age (years)", ylab = "FEV1 (L)", main = "Actual: FEV1 vs Age")
+  fit <- lm(fev1 ~ age, data = d)
+  abline(fit, lwd = 2)
+
+  set.seed(42)
+  ages <- seq(min(d$age), max(d$age), length.out = max(100, nrow(d)))
+  fev  <- 0.5 + 0.12*ages + rnorm(length(ages), 0, 0.1)
+  plot(ages, fev, xlab = "Age (years)", ylab = "FEV1 (L)", main = "Hypothetical (If Statement True)")
+  abline(lm(fev ~ ages))
+  invisible(NULL)
+}
+premise3_plots(dataset)
+
 
 ```
 
@@ -117,5 +255,4 @@ Describe one alternative to the primary statement "FEV1 values in children are h
 Create a fault tree for the alternative outcome describing how the alternative outcome could be realized in the data even if the primary statement were true.
 
 Your fault tree should be created as a separate image and does not need to be created in R. Upload the image of the fault tree to Canvas.
-
 
